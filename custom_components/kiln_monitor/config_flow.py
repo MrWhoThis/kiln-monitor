@@ -47,15 +47,18 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
 
     try:
         async with session.post(LOGIN_URL, headers=login_headers, json=login_payload) as resp:
-            if resp.status != 200:
+            if resp.status in (400, 401, 403):
                 raise InvalidAuth(f"Login failed with status {resp.status}")
-            
+            if resp.status != 200:
+                raise CannotConnect(f"Login failed with status {resp.status}")
+
             auth_data = await resp.json()
             token = auth_data.get("authentication_token")
-            
+
             if not token:
                 raise InvalidAuth("Authentication token not found in response")
-                
+    except InvalidAuth:
+        raise
     except Exception as exc:
         _LOGGER.error("Failed to authenticate: %s", exc)
         raise CannotConnect from exc
