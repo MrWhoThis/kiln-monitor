@@ -7,6 +7,7 @@ from typing import Any
 import asyncio
 
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
@@ -71,10 +72,10 @@ class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             try:
                 # Step 1: Ensure we have a valid token
                 await self._ensure_authenticated()
-                
+
                 # Step 2: Fetch kiln data
                 data = await self._fetch_kiln_data()
-                
+
                 # Reset failure counter and restore configured interval on success
                 self._consecutive_failures = 0
                 if self.update_interval != self._base_update_interval:
@@ -84,7 +85,10 @@ class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
                     self.update_interval = self._base_update_interval
                 return data
-                
+
+            except ConfigEntryAuthFailed:
+                # Credentials are bad — retrying won't help, surface to HA so reauth fires
+                raise
             except Exception as exc:
                 self._consecutive_failures += 1
                 _LOGGER.warning(
@@ -148,21 +152,25 @@ class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 json=login_payload,
                 timeout=30
             ) as resp:
-                if resp.status == 401:
-                    raise UpdateFailed("Invalid credentials - check email and password")
+                if resp.status in (400, 401, 403):
+                    raise ConfigEntryAuthFailed(
+                        f"Invalid credentials for kiln {self.kiln_name} (status {resp.status})"
+                    )
                 elif resp.status == 429:
                     raise UpdateFailed("Rate limited - too many login attempts")
                 elif resp.status != 200:
                     raise UpdateFailed(f"Login failed with status {resp.status}")
-                
+
                 auth_data = await resp.json()
                 self.token = auth_data.get("authentication_token")
                 if not self.token:
                     raise UpdateFailed("Token not found in login response")
-                    
-                _LOGGER.debug("Successfully authenticated with Kiln API for kiln %s", 
+
+                _LOGGER.debug("Successfully authenticated with Kiln API for kiln %s",
                             self.kiln_name)
-                
+
+        except ConfigEntryAuthFailed:
+            raise
         except asyncio.TimeoutError:
             raise UpdateFailed("Login request timed out")
         except Exception as exc:
