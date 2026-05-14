@@ -1,12 +1,14 @@
 {
   "domain": "kiln_monitor",
   "name": "Kiln Monitor",
-  "codeowners": ["parsadanov@gmail.com"],
+  "codeowners": [
+    "parsadanov@gmail.com"
+  ],
   "config_flow": true,
   "dependencies": [],
   "documentation": "https://github.com/MrWhoThis/kiln-monitor",
   "integration_type": "hub",
   "iot_class": "cloud_polling",
   "requirements": [],
-  "version": "2026.5.13"
+  "version": "2026.5.14"
 }
