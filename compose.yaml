@@ -1,0 +1,12 @@
+services:
+  homeassistant:
+    container_name: kiln-monitor-ha
+    image: ghcr.io/home-assistant/home-assistant:stable
+    restart: unless-stopped
+    ports:
+      - "8123:8123"
+    volumes:
+      - ./dev-config:/config
+      - ./custom_components/kiln_monitor:/config/custom_components/kiln_monitor
+    environment:
+      - TZ=America/New_York

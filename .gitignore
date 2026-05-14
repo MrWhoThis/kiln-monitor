@@ -1,2 +1,4 @@
 .DS_Store
 custom_components/.DS_Store
+dev-config/
+__pycache__/
