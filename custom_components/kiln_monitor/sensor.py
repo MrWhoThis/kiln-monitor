@@ -101,23 +101,26 @@ class KilnSensor(CoordinatorEntity[KilnDataCoordinator], SensorEntity):
             return None
             
         try:
-            # Navigate through the data path
-            data = self.coordinator.data
+            # Navigate through the data path; bail out the moment anything is missing
+            # so we don't end up coercing {} to float/int below.
+            data: Any = self.coordinator.data
             for key in self._sensor_config["data_path"]:
-                data = data.get(key, {})
-            
-            # Convert to the specified type if value exists
-            if data is not None:
-                value_type = self._sensor_config["value_type"]
-                if value_type == float:
-                    return float(data)
-                elif value_type == int:
-                    return int(data)
-                else:
-                    return str(data)
-            
-            return None
-            
+                if not isinstance(data, dict):
+                    return None
+                if key not in data:
+                    return None
+                data = data[key]
+
+            if data is None:
+                return None
+
+            value_type = self._sensor_config["value_type"]
+            if value_type is float:
+                return float(data)
+            if value_type is int:
+                return int(data)
+            return str(data)
+
         except (KeyError, ValueError, TypeError) as exc:
             _LOGGER.error("Failed to parse sensor %s for kiln %s: %s", 
                          self._sensor_key, self.coordinator.kiln_name, exc)

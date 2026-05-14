@@ -1,10 +1,10 @@
 """DataUpdateCoordinator for Kiln Monitor."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import timedelta
 from typing import Any
-import asyncio
 
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
@@ -61,8 +61,6 @@ class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.kiln_name: str | None = None
 
         self._consecutive_failures = 0
-        self._max_retries = 3
-        self._retry_delay = 30  # seconds
 
     def update_intervals(
         self, active_interval_minutes: int, idle_interval_minutes: int
@@ -95,60 +93,39 @@ class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Update data via library."""
-        for attempt in range(self._max_retries):
-            try:
-                # Step 1: Ensure we have a valid token
-                await self._ensure_authenticated()
-
-                # Step 2: Fetch kiln data
-                data = await self._fetch_kiln_data()
-
-                # Reset failure counter and pick the interval that matches the
-                # kiln's current status (fast while firing, slow while idle).
-                self._consecutive_failures = 0
-                status = data.get("list", {}).get("kilnStatus")
-                desired_interval = self._interval_for_status(status)
-                if self.update_interval != desired_interval:
-                    _LOGGER.info(
-                        "Kiln %s status=%s — setting update interval to %s",
-                        self.kiln_name, status, desired_interval,
+        try:
+            await self._ensure_authenticated()
+            data = await self._fetch_kiln_data()
+        except ConfigEntryAuthFailed:
+            # Credentials are bad — retrying won't help, surface to HA so reauth fires
+            raise
+        except UpdateFailed:
+            self._consecutive_failures += 1
+            # After repeated failures, stretch the polling interval up to 60 min
+            # so we don't hammer the API. The next successful poll resets it.
+            if self._consecutive_failures >= 5:
+                current_minutes = self.update_interval.total_seconds() / 60
+                new_minutes = min(60, max(15, current_minutes * 2))
+                if new_minutes > current_minutes:
+                    _LOGGER.warning(
+                        "Too many consecutive failures (%d) for kiln %s, backing off update interval to %d min",
+                        self._consecutive_failures, self.kiln_name, new_minutes,
                     )
-                    self.update_interval = desired_interval
-                return data
+                    self.update_interval = timedelta(minutes=new_minutes)
+            raise
 
-            except ConfigEntryAuthFailed:
-                # Credentials are bad — retrying won't help, surface to HA so reauth fires
-                raise
-            except Exception as exc:
-                self._consecutive_failures += 1
-                _LOGGER.warning(
-                    "Attempt %d/%d failed for kiln %s data fetch: %s", 
-                    attempt + 1, self._max_retries, self.kiln_name, exc
-                )
-                
-                # If this is a 500 error or auth issue, try to re-authenticate
-                if "500" in str(exc) or "auth" in str(exc).lower():
-                    _LOGGER.info("Clearing token for kiln %s due to potential auth issue", 
-                               self.kiln_name)
-                    self.token = None
-                
-                # If this isn't the last attempt, wait and retry
-                if attempt < self._max_retries - 1:
-                    await asyncio.sleep(self._retry_delay)
-                    continue
-                
-                # If we've had too many consecutive failures, back off exponentially up to 60 min
-                if self._consecutive_failures >= 5:
-                    current_minutes = self.update_interval.total_seconds() / 60
-                    new_minutes = min(60, max(15, current_minutes * 2))
-                    if new_minutes > current_minutes:
-                        _LOGGER.warning(
-                            "Too many consecutive failures (%d) for kiln %s, backing off update interval to %d min",
-                            self._consecutive_failures, self.kiln_name, new_minutes,
-                        )
-                        self.update_interval = timedelta(minutes=new_minutes)
-                
-                raise UpdateFailed(f"Kiln API error for {self.kiln_name} after {self._max_retries} attempts: {exc}") from exc
+        # Reset failure counter and pick the interval that matches the kiln's
+        # current status (fast while firing, slow while idle).
+        self._consecutive_failures = 0
+        status = data.get("list", {}).get("kilnStatus")
+        desired_interval = self._interval_for_status(status)
+        if self.update_interval != desired_interval:
+            _LOGGER.info(
+                "Kiln %s status=%s — setting update interval to %s",
+                self.kiln_name, status, desired_interval,
+            )
+            self.update_interval = desired_interval
+        return data
 
     async def _ensure_authenticated(self) -> None:
         """Ensure we have a valid authentication token."""
@@ -239,15 +216,19 @@ class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 timeout=30
             ) as resp:
                 if resp.status == 401:
-                    # Token might be expired, clear it to force re-auth
+                    # Token expired; clear it so the next poll re-authenticates.
                     self.token = None
                     raise UpdateFailed("Authentication token expired during data fetch")
-                elif resp.status == 404:
-                    # Kiln might not exist or be accessible
+                if resp.status == 404:
                     raise UpdateFailed("Kiln not found - check if kiln is online")
-                elif resp.status == 500:
-                    raise UpdateFailed("Server error when fetching kiln data (status 500)")
-                elif resp.status != 200:
+                if resp.status >= 500:
+                    # Server-side error: drop the token in case it's auth-related,
+                    # the next poll will re-authenticate.
+                    self.token = None
+                    raise UpdateFailed(
+                        f"Server error when fetching kiln data (status {resp.status})"
+                    )
+                if resp.status != 200:
                     raise UpdateFailed(f"Kiln data fetch failed with status {resp.status}")
                 
                 data = await resp.json()
@@ -258,5 +239,9 @@ class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.debug("Successfully fetched data for kiln %s", self.kiln_name)
             return data[0]
             
+        except UpdateFailed:
+            raise
         except asyncio.TimeoutError:
             raise UpdateFailed("Kiln data request timed out")
+        except Exception as exc:
+            raise UpdateFailed(f"Kiln data request failed: {exc}") from exc

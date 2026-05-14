@@ -126,7 +126,8 @@ async def _fetch_all_kilns(hass: HomeAssistant, session, config_data: dict) -> l
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
-        hass.data[DOMAIN].pop(entry.entry_id)
+        # pop(..., None) so a failed setup (no entry stored) doesn't KeyError on unload.
+        hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     
     return unload_ok
 
