@@ -38,12 +38,14 @@
     "step": {
       "init": {
         "title": "Kiln Monitor settings",
-        "description": "Choose how often Home Assistant should pull fresh data from the KilnAid cloud service.\n\nShorter intervals give you more responsive temperature and status updates while a kiln is firing, but result in more requests to Bartlett's servers. Longer intervals are gentler but mean sensor values can lag behind reality by several minutes.",
+        "description": "Kiln Monitor uses adaptive polling: it checks the KilnAid cloud service frequently when a kiln is **actively firing**, and less often when it's idle. This keeps temperature updates responsive during a firing without hammering Bartlett's servers the rest of the time.\n\nThe kiln is treated as \"active\" whenever its status reports **Firing**. Any other status (idle, ready, cooling, off, etc.) uses the idle interval.\n\nSet both intervals below. Setting them to the same value disables adaptive polling and always polls at that rate.",
         "data": {
-          "update_interval": "Polling interval (minutes)"
+          "active_update_interval": "Active polling interval (minutes)",
+          "idle_update_interval": "Idle polling interval (minutes)"
         },
         "data_description": {
-          "update_interval": "How often to fetch new data from KilnAid. Allowed range: 5–60 minutes. Recommended: 5 minutes while actively firing, 15+ minutes otherwise."
+          "active_update_interval": "How often to poll while a kiln is firing. Allowed range: 5–60 minutes. Recommended: 5 minutes.",
+          "idle_update_interval": "How often to poll while no kiln is firing. Allowed range: 5–120 minutes. Recommended: 15 minutes."
         }
       }
     }

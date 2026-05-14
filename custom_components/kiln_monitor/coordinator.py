@@ -11,11 +11,13 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
+    ACTIVE_KILN_STATUSES,
     DATA_URL,
     LOGIN_URL,
     CONF_EMAIL,
     CONF_PASSWORD,
-    DEFAULT_UPDATE_INTERVAL,
+    DEFAULT_ACTIVE_UPDATE_INTERVAL,
+    DEFAULT_IDLE_UPDATE_INTERVAL,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -29,23 +31,26 @@ class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         hass: HomeAssistant,
         session,
         config_data: dict[str, str],
-        update_interval_minutes: int = DEFAULT_UPDATE_INTERVAL,
+        active_interval_minutes: int = DEFAULT_ACTIVE_UPDATE_INTERVAL,
+        idle_interval_minutes: int = DEFAULT_IDLE_UPDATE_INTERVAL,
         kiln_info: dict[str, Any] | None = None,
     ) -> None:
         """Initialize."""
+        self._active_interval = timedelta(minutes=active_interval_minutes)
+        self._idle_interval = timedelta(minutes=idle_interval_minutes)
+        # Start at the idle interval; first successful fetch will switch to active
+        # if the kiln is firing.
         super().__init__(
             hass,
             _LOGGER,
             name="Kiln API",
-            update_interval=timedelta(minutes=update_interval_minutes),
+            update_interval=self._idle_interval,
         )
-        self._base_update_interval = timedelta(minutes=update_interval_minutes)
         self.session = session
         self.email = config_data[CONF_EMAIL]
         self.password = config_data[CONF_PASSWORD]
         self.token: str | None = None
-        
-        # If kiln_info is provided, use it; otherwise these will be set during first fetch
+
         if kiln_info:
             self.kiln_id: str | None = kiln_info.get("kiln_id")
             self.serial_number: str | None = kiln_info.get("serial_number")
@@ -54,17 +59,39 @@ class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.kiln_id: str | None = None
             self.serial_number: str | None = None
             self.kiln_name: str | None = None
-            
+
         self._consecutive_failures = 0
         self._max_retries = 3
         self._retry_delay = 30  # seconds
 
-    def update_interval_minutes(self, minutes: int) -> None:
-        """Update the refresh interval."""
-        self._base_update_interval = timedelta(minutes=minutes)
-        self.update_interval = self._base_update_interval
-        _LOGGER.debug("Update interval changed to %d minutes for kiln %s",
-                     minutes, self.kiln_name)
+    def update_intervals(
+        self, active_interval_minutes: int, idle_interval_minutes: int
+    ) -> None:
+        """Update the active and idle refresh intervals."""
+        self._active_interval = timedelta(minutes=active_interval_minutes)
+        self._idle_interval = timedelta(minutes=idle_interval_minutes)
+        new_interval = self._interval_for_status(self._current_status())
+        if self.update_interval != new_interval:
+            self.update_interval = new_interval
+        _LOGGER.debug(
+            "Intervals updated for kiln %s: active=%dm idle=%dm (now using %s)",
+            self.kiln_name,
+            active_interval_minutes,
+            idle_interval_minutes,
+            new_interval,
+        )
+
+    def _current_status(self) -> Any:
+        """Return the last-known kilnStatus value, or None if not yet fetched."""
+        if not self.data:
+            return None
+        return self.data.get("list", {}).get("kilnStatus")
+
+    def _interval_for_status(self, status: Any) -> timedelta:
+        """Return the polling interval appropriate for the given kilnStatus."""
+        if isinstance(status, str) and status.strip().lower() in ACTIVE_KILN_STATUSES:
+            return self._active_interval
+        return self._idle_interval
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Update data via library."""
@@ -76,14 +103,17 @@ class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # Step 2: Fetch kiln data
                 data = await self._fetch_kiln_data()
 
-                # Reset failure counter and restore configured interval on success
+                # Reset failure counter and pick the interval that matches the
+                # kiln's current status (fast while firing, slow while idle).
                 self._consecutive_failures = 0
-                if self.update_interval != self._base_update_interval:
+                status = data.get("list", {}).get("kilnStatus")
+                desired_interval = self._interval_for_status(status)
+                if self.update_interval != desired_interval:
                     _LOGGER.info(
-                        "Kiln %s recovered, restoring update interval to %s",
-                        self.kiln_name, self._base_update_interval,
+                        "Kiln %s status=%s — setting update interval to %s",
+                        self.kiln_name, status, desired_interval,
                     )
-                    self.update_interval = self._base_update_interval
+                    self.update_interval = desired_interval
                 return data
 
             except ConfigEntryAuthFailed:

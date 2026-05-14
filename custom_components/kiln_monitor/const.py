@@ -1,5 +1,4 @@
 """Constants for the Kiln Monitor integration."""
-from datetime import timedelta
 
 DOMAIN = "kiln_monitor"
 
@@ -11,11 +10,15 @@ DATA_URL = "https://kiln.bartinst.com/kilns/data"
 # Configuration keys
 CONF_EMAIL = "email"
 CONF_PASSWORD = "password"
-CONF_UPDATE_INTERVAL = "update_interval"
+CONF_ACTIVE_UPDATE_INTERVAL = "active_update_interval"
+CONF_IDLE_UPDATE_INTERVAL = "idle_update_interval"
 
 # Default values
-DEFAULT_UPDATE_INTERVAL = 5  # minutes
-SCAN_INTERVAL = timedelta(minutes=DEFAULT_UPDATE_INTERVAL)
+DEFAULT_ACTIVE_UPDATE_INTERVAL = 5   # minutes, used while a kiln is firing
+DEFAULT_IDLE_UPDATE_INTERVAL = 15    # minutes, used when the kiln is idle
+
+# kilnStatus strings that should trigger fast polling (case-insensitive)
+ACTIVE_KILN_STATUSES = frozenset({"firing"})
 
 # Sensor definitions
 SENSORS = {

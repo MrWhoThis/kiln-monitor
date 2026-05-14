@@ -11,7 +11,16 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .const import DOMAIN, LOGIN_URL, CONF_EMAIL, CONF_PASSWORD, CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL
+from .const import (
+    DOMAIN,
+    LOGIN_URL,
+    CONF_EMAIL,
+    CONF_PASSWORD,
+    CONF_ACTIVE_UPDATE_INTERVAL,
+    CONF_IDLE_UPDATE_INTERVAL,
+    DEFAULT_ACTIVE_UPDATE_INTERVAL,
+    DEFAULT_IDLE_UPDATE_INTERVAL,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -155,9 +164,11 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
-        # Get current update interval from options, fallback to default
-        current_interval = self.config_entry.options.get(
-            CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL
+        current_active = self.config_entry.options.get(
+            CONF_ACTIVE_UPDATE_INTERVAL, DEFAULT_ACTIVE_UPDATE_INTERVAL
+        )
+        current_idle = self.config_entry.options.get(
+            CONF_IDLE_UPDATE_INTERVAL, DEFAULT_IDLE_UPDATE_INTERVAL
         )
 
         return self.async_show_form(
@@ -165,9 +176,13 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             data_schema=vol.Schema(
                 {
                     vol.Optional(
-                        CONF_UPDATE_INTERVAL,
-                        default=current_interval,
+                        CONF_ACTIVE_UPDATE_INTERVAL,
+                        default=current_active,
                     ): vol.All(vol.Coerce(int), vol.Range(min=5, max=60)),
+                    vol.Optional(
+                        CONF_IDLE_UPDATE_INTERVAL,
+                        default=current_idle,
+                    ): vol.All(vol.Coerce(int), vol.Range(min=5, max=120)),
                 }
             ),
         )

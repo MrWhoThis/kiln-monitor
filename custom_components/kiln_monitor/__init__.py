@@ -9,7 +9,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.exceptions import ConfigEntryNotReady
 
-from .const import DOMAIN, CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL, SETTINGS_URL
+from .const import (
+    DOMAIN,
+    CONF_ACTIVE_UPDATE_INTERVAL,
+    CONF_IDLE_UPDATE_INTERVAL,
+    DEFAULT_ACTIVE_UPDATE_INTERVAL,
+    DEFAULT_IDLE_UPDATE_INTERVAL,
+    SETTINGS_URL,
+)
 from .coordinator import KilnDataCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -21,9 +28,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Kiln Monitor from a config entry."""
     session = async_get_clientsession(hass)
     
-    # Get update interval from options or use default
-    update_interval = entry.options.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)
-    
+    active_interval = entry.options.get(
+        CONF_ACTIVE_UPDATE_INTERVAL, DEFAULT_ACTIVE_UPDATE_INTERVAL
+    )
+    idle_interval = entry.options.get(
+        CONF_IDLE_UPDATE_INTERVAL, DEFAULT_IDLE_UPDATE_INTERVAL
+    )
+
     # First, get all kilns for this account
     try:
         kilns = await _fetch_all_kilns(hass, session, entry.data)
@@ -41,11 +52,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinators = []
     for kiln_info in kilns:
         coordinator = KilnDataCoordinator(
-            hass, 
-            session, 
-            entry.data, 
-            update_interval_minutes=update_interval,
-            kiln_info=kiln_info
+            hass,
+            session,
+            entry.data,
+            active_interval_minutes=active_interval,
+            idle_interval_minutes=idle_interval,
+            kiln_info=kiln_info,
         )
         
         await coordinator.async_config_entry_first_refresh()
@@ -122,12 +134,18 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Update listener for options changes."""
     coordinators: list[KilnDataCoordinator] = hass.data[DOMAIN][entry.entry_id]
-    
-    # Update the update interval for all coordinators
-    update_interval = entry.options.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)
-    
+
+    active_interval = entry.options.get(
+        CONF_ACTIVE_UPDATE_INTERVAL, DEFAULT_ACTIVE_UPDATE_INTERVAL
+    )
+    idle_interval = entry.options.get(
+        CONF_IDLE_UPDATE_INTERVAL, DEFAULT_IDLE_UPDATE_INTERVAL
+    )
+
     for coordinator in coordinators:
-        coordinator.update_interval_minutes(update_interval)
-    
-    _LOGGER.info("Updated Kiln Monitor update interval to %d minutes for %d kiln(s)", 
-                 update_interval, len(coordinators))
+        coordinator.update_intervals(active_interval, idle_interval)
+
+    _LOGGER.info(
+        "Updated Kiln Monitor intervals (active=%dm, idle=%dm) for %d kiln(s)",
+        active_interval, idle_interval, len(coordinators),
+    )
