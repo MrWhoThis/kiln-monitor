@@ -38,6 +38,7 @@ class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             name="Kiln API",
             update_interval=timedelta(minutes=update_interval_minutes),
         )
+        self._base_update_interval = timedelta(minutes=update_interval_minutes)
         self.session = session
         self.email = config_data[CONF_EMAIL]
         self.password = config_data[CONF_PASSWORD]
@@ -59,8 +60,9 @@ class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def update_interval_minutes(self, minutes: int) -> None:
         """Update the refresh interval."""
-        self.update_interval = timedelta(minutes=minutes)
-        _LOGGER.debug("Update interval changed to %d minutes for kiln %s", 
+        self._base_update_interval = timedelta(minutes=minutes)
+        self.update_interval = self._base_update_interval
+        _LOGGER.debug("Update interval changed to %d minutes for kiln %s",
                      minutes, self.kiln_name)
 
     async def _async_update_data(self) -> dict[str, Any]:
@@ -73,8 +75,14 @@ class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # Step 2: Fetch kiln data
                 data = await self._fetch_kiln_data()
                 
-                # Reset failure counter on success
+                # Reset failure counter and restore configured interval on success
                 self._consecutive_failures = 0
+                if self.update_interval != self._base_update_interval:
+                    _LOGGER.info(
+                        "Kiln %s recovered, restoring update interval to %s",
+                        self.kiln_name, self._base_update_interval,
+                    )
+                    self.update_interval = self._base_update_interval
                 return data
                 
             except Exception as exc:
@@ -95,14 +103,16 @@ class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     await asyncio.sleep(self._retry_delay)
                     continue
                 
-                # If we've had too many consecutive failures, increase the update interval
+                # If we've had too many consecutive failures, back off exponentially up to 60 min
                 if self._consecutive_failures >= 5:
-                    _LOGGER.warning(
-                        "Too many consecutive failures (%d) for kiln %s, temporarily increasing update interval",
-                        self._consecutive_failures, self.kiln_name
-                    )
-                    # Temporarily increase interval to reduce load
-                    self.update_interval = timedelta(minutes=max(15, self.update_interval.total_seconds() / 60))
+                    current_minutes = self.update_interval.total_seconds() / 60
+                    new_minutes = min(60, max(15, current_minutes * 2))
+                    if new_minutes > current_minutes:
+                        _LOGGER.warning(
+                            "Too many consecutive failures (%d) for kiln %s, backing off update interval to %d min",
+                            self._consecutive_failures, self.kiln_name, new_minutes,
+                        )
+                        self.update_interval = timedelta(minutes=new_minutes)
                 
                 raise UpdateFailed(f"Kiln API error for {self.kiln_name} after {self._max_retries} attempts: {exc}") from exc
 
