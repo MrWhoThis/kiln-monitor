@@ -79,6 +79,8 @@ class KilnSensor(CoordinatorEntity[KilnDataCoordinator], SensorEntity):
             self._attr_state_class = SensorStateClass.MEASUREMENT
         elif sensor_config["state_class"] == "total":
             self._attr_state_class = SensorStateClass.TOTAL
+        elif sensor_config["state_class"] == "total_increasing":
+            self._attr_state_class = SensorStateClass.TOTAL_INCREASING
 
     @property
     def device_info(self) -> DeviceInfo:
