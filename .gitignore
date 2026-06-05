@@ -2,3 +2,8 @@
 custom_components/.DS_Store
 dev-config/
 __pycache__/
+
+# Local API exploration: raw mitmproxy capture and throwaway probe scripts
+# (the probes contain hardcoded test credentials — never commit them).
+flows
+scripts/probe*.py

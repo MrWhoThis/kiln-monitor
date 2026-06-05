@@ -14,6 +14,7 @@ from .const import (
     ACTIVE_KILN_STATUSES,
     DATA_URL,
     LOGIN_URL,
+    STATUS_URL,
     CONF_EMAIL,
     CONF_PASSWORD,
     DEFAULT_ACTIVE_UPDATE_INTERVAL,
@@ -184,12 +185,9 @@ class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.error("Authentication failed for kiln %s: %s", self.kiln_name, exc)
             raise UpdateFailed(f"Authentication error: {exc}") from exc
 
-    async def _fetch_kiln_data(self) -> dict[str, Any]:
-        """Fetch kiln data using kiln_id."""
-        if not self.kiln_id:
-            raise UpdateFailed(f"No kiln_id available for kiln {self.kiln_name}")
-            
-        data_headers = {
+    def _data_headers(self) -> dict[str, str]:
+        """Build the standard authenticated headers for kiln API calls."""
+        return {
             "content-type": "application/json",
             "accept": "application/json",
             "auth-token": f"binst-cookie={self.token}",
@@ -203,6 +201,13 @@ class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "email": self.email,
             "sec-fetch-dest": "empty"
         }
+
+    async def _fetch_kiln_data(self) -> dict[str, Any]:
+        """Fetch kiln data using kiln_id."""
+        if not self.kiln_id:
+            raise UpdateFailed(f"No kiln_id available for kiln {self.kiln_name}")
+
+        data_headers = self._data_headers()
 
         data_payload = {
             "externalIds": [self.kiln_id]
@@ -236,12 +241,64 @@ class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if not isinstance(data, list) or not data:
                 raise UpdateFailed("Empty or invalid kiln data response")
 
+            kiln_data = data[0]
+
+            # Supplement with firing details (estimated time remaining, current
+            # segment, set point). This is best-effort: a failure here must not
+            # take down the core temperature/status sensors.
+            status = await self._fetch_firing_status(data_headers)
+            if status is not None:
+                kiln_data["status"] = status
+
             _LOGGER.debug("Successfully fetched data for kiln %s", self.kiln_name)
-            return data[0]
-            
+            return kiln_data
+
         except UpdateFailed:
             raise
         except asyncio.TimeoutError:
             raise UpdateFailed("Kiln data request timed out")
         except Exception as exc:
             raise UpdateFailed(f"Kiln data request failed: {exc}") from exc
+
+    async def _fetch_firing_status(
+        self, data_headers: dict[str, str]
+    ) -> dict[str, Any] | None:
+        """Fetch firing status (estimated time remaining, segment, set point).
+
+        Returns the status dict for this kiln, or None if it could not be
+        retrieved. Unlike the main data fetch this never raises, so a hiccup on
+        this secondary endpoint can't fail the whole update.
+        """
+        # This endpoint expects the external id as a bare string, not an array.
+        status_payload = {"externalIds": self.kiln_id}
+
+        try:
+            async with self.session.post(
+                STATUS_URL,
+                headers=data_headers,
+                json=status_payload,
+                timeout=30
+            ) as resp:
+                if resp.status != 200:
+                    _LOGGER.debug(
+                        "Firing status fetch for kiln %s returned status %s",
+                        self.kiln_name, resp.status,
+                    )
+                    return None
+
+                status_data = await resp.json()
+
+            if not isinstance(status_data, list) or not status_data:
+                _LOGGER.debug(
+                    "Empty firing status response for kiln %s", self.kiln_name
+                )
+                return None
+
+            return status_data[0]
+
+        except Exception as exc:
+            _LOGGER.debug(
+                "Could not fetch firing status for kiln %s: %s",
+                self.kiln_name, exc,
+            )
+            return None

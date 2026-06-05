@@ -5,6 +5,7 @@ A custom integration that surfaces your Bartlett Instruments kiln in Home Assist
 ## Features
 
 - **Live kiln telemetry** — temperature, kiln status, firmware version, lifetime firings count, and zone count.
+- **Firing progress** — estimated time remaining, elapsed firing time, current program segment, set point, and the active program name while a firing is in progress.
 - **Multiple kilns per account** — every kiln on your KilnAid account gets its own device and sensors automatically.
 - **Adaptive polling** — polls frequently (default: every 5 minutes) while a kiln is actively firing and backs off (default: every 15 minutes) when idle. Both intervals are configurable in the integration's options.
 - **Reauthentication flow** — if your stored password stops working (e.g. after changing it in the KilnAid app), Home Assistant prompts you to re-enter it without losing your sensors or history.
@@ -21,6 +22,16 @@ For each kiln on your account, the following sensors are created:
 | Firmware Version | — | Reported firmware version of the kiln controller |
 | Number of Firings | firings | Lifetime firing counter |
 | Zone Count | zones | Number of controlled zones on the kiln |
+| Estimated Time Remaining | — | Time left in the current firing (e.g. `9h 53m`) |
+| Firing Time | — | Elapsed time since the firing started (e.g. `4:49`) |
+| Hold Remaining Time | — | Time left in the current hold (e.g. `0:00`) |
+| Current Segment | — | Active program segment (e.g. `Ramp 3 of 6`) |
+| Set Point | °F | Target temperature the controller is driving toward |
+| Program Name | — | Name of the running firing program (e.g. `Cone 06 Slow`) |
+
+The firing-progress sensors come from the kiln's live status feed and are only
+meaningful while a firing is in progress; the service reports stale values when
+the kiln is idle.
 
 Sensor names are prefixed with the kiln name so they remain unambiguous when multiple kilns are configured.
 

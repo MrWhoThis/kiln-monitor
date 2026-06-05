@@ -6,6 +6,9 @@ DOMAIN = "kiln_monitor"
 LOGIN_URL = "https://bartinst-user-service-prod.herokuapp.com/login"
 SETTINGS_URL = "https://kiln.bartinst.com/kilns/settings"
 DATA_URL = "https://kiln.bartinst.com/kilns/data"
+# Firing status used by the web client; supplies estimated time remaining and
+# the current program segment. Takes the external id (kiln_id) as a string.
+STATUS_URL = "https://kiln.bartinst.com/kilnaid-data/status"
 
 # Configuration keys
 CONF_EMAIL = "email"
@@ -61,5 +64,56 @@ SENSORS = {
         "state_class": None,
         "data_path": ["settings", "numZones"],
         "value_type": int,
+    },
+    # Firing details from the /kilnaid-data/status endpoint. These are only
+    # meaningful while a firing is in progress; the API leaves stale values when
+    # the kiln is idle.
+    "estimatedTimeRemaining": {
+        "name": "Estimated Time Remaining",
+        "unit": None,
+        "device_class": None,
+        "state_class": None,
+        "data_path": ["status", "estimatedTimeRemaining"],
+        "value_type": str,
+    },
+    "firingTime": {
+        "name": "Firing Time",
+        "unit": None,
+        "device_class": None,
+        "state_class": None,
+        "data_path": ["status", "firingTime"],
+        "value_type": str,
+    },
+    "holdRemainingTime": {
+        "name": "Hold Remaining Time",
+        "unit": None,
+        "device_class": None,
+        "state_class": None,
+        "data_path": ["status", "holdRemainingTime"],
+        "value_type": str,
+    },
+    "segment": {
+        "name": "Current Segment",
+        "unit": None,
+        "device_class": None,
+        "state_class": None,
+        "data_path": ["status", "segment"],
+        "value_type": str,
+    },
+    "setPoint": {
+        "name": "Set Point",
+        "unit": "°F",
+        "device_class": "temperature",
+        "state_class": "measurement",
+        "data_path": ["status", "setPoint"],
+        "value_type": float,
+    },
+    "programName": {
+        "name": "Program Name",
+        "unit": None,
+        "device_class": None,
+        "state_class": None,
+        "data_path": ["status", "programName"],
+        "value_type": str,
     },
 }
