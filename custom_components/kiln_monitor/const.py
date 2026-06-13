@@ -1,6 +1,22 @@
 """Constants for the Kiln Monitor integration."""
+from __future__ import annotations
+
+from typing import Any
 
 DOMAIN = "kiln_monitor"
+
+
+def dig(data: Any, path: list[str]) -> Any:
+    """Walk ``path`` through nested dicts, returning ``None`` if anything is missing.
+
+    Bails out the moment a level isn't a dict or a key is absent so callers never
+    end up coercing ``{}`` to a number.
+    """
+    for key in path:
+        if not isinstance(data, dict) or key not in data:
+            return None
+        data = data[key]
+    return data
 
 # API URLs
 LOGIN_URL = "https://bartinst-user-service-prod.herokuapp.com/login"
@@ -22,6 +38,10 @@ DEFAULT_IDLE_UPDATE_INTERVAL = 15    # minutes, used when the kiln is idle
 
 # kilnStatus strings that should trigger fast polling (case-insensitive)
 ACTIVE_KILN_STATUSES = frozenset({"firing"})
+
+# Path to the kiln's lifetime firing counter in the API response. Shared by the
+# numFirings sensor and the element-tracking logic so the two never drift.
+NUMFIRINGS_DATA_PATH = ["settings", "numFirings"]
 
 # Sensor definitions
 SENSORS = {
@@ -54,7 +74,7 @@ SENSORS = {
         "unit": "firings",
         "device_class": None,
         "state_class": "total_increasing",
-        "data_path": ["settings", "numFirings"],
+        "data_path": NUMFIRINGS_DATA_PATH,
         "value_type": int,
     },
     "numZones": {

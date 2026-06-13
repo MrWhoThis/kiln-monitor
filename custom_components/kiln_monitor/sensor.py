@@ -12,12 +12,11 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, SENSORS
+from .const import DOMAIN, SENSORS, dig
 from .coordinator import KilnDataCoordinator
+from .entity import KilnBaseEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,7 +30,7 @@ async def async_setup_entry(
     coordinators: list[KilnDataCoordinator] = hass.data[DOMAIN][config_entry.entry_id]
 
     sensors = []
-    
+
     # Create sensors for each kiln
     for coordinator in coordinators:
         for sensor_key, sensor_config in SENSORS.items():
@@ -42,14 +41,15 @@ async def async_setup_entry(
                     sensor_config=sensor_config,
                 )
             )
-        
-        _LOGGER.info("Created %d sensors for kiln %s", 
-                    len(SENSORS), coordinator.kiln_name)
+        sensors.append(KilnFiringsOnCurrentElementsSensor(coordinator))
+
+        _LOGGER.info("Created %d sensors for kiln %s",
+                    len(SENSORS) + 1, coordinator.kiln_name)
 
     async_add_entities(sensors)
 
 
-class KilnSensor(CoordinatorEntity[KilnDataCoordinator], SensorEntity):
+class KilnSensor(KilnBaseEntity, SensorEntity):
     """Representation of a Kiln sensor."""
 
     def __init__(
@@ -83,59 +83,47 @@ class KilnSensor(CoordinatorEntity[KilnDataCoordinator], SensorEntity):
             self._attr_state_class = SensorStateClass.TOTAL_INCREASING
 
     @property
-    def device_info(self) -> DeviceInfo:
-        """Return device information about this kiln."""
-        return DeviceInfo(
-            identifiers={(DOMAIN, self.coordinator.serial_number)},
-            name=self.coordinator.kiln_name or "Kiln",
-            manufacturer="Bartinst",
-            model="Kiln",
-            sw_version=self._get_firmware_version(),
-            serial_number=self.coordinator.serial_number,
-        )
-
-    @property
     def native_value(self) -> Any:
         """Return the state of the sensor."""
-        if not self.coordinator.data:
+        data = dig(self.coordinator.data, self._sensor_config["data_path"])
+        if data is None:
             return None
-            
+
         try:
-            # Navigate through the data path; bail out the moment anything is missing
-            # so we don't end up coercing {} to float/int below.
-            data: Any = self.coordinator.data
-            for key in self._sensor_config["data_path"]:
-                if not isinstance(data, dict):
-                    return None
-                if key not in data:
-                    return None
-                data = data[key]
-
-            if data is None:
-                return None
-
             value_type = self._sensor_config["value_type"]
             if value_type is float:
                 return float(data)
             if value_type is int:
                 return int(data)
             return str(data)
-
-        except (KeyError, ValueError, TypeError) as exc:
-            _LOGGER.error("Failed to parse sensor %s for kiln %s: %s", 
+        except (ValueError, TypeError) as exc:
+            _LOGGER.error("Failed to parse sensor %s for kiln %s: %s",
                          self._sensor_key, self.coordinator.kiln_name, exc)
             return None
 
-    @property
-    def available(self) -> bool:
-        """Return True if entity is available."""
-        return (
-            self.coordinator.last_update_success 
-            and self.coordinator.data is not None
+
+class KilnFiringsOnCurrentElementsSensor(KilnBaseEntity, SensorEntity):
+    """Read-only count of firings accumulated on the current element set.
+
+    Derived as ``current numFirings - numFirings(at install date)``, where the
+    install date comes from the "Elements installed" date entity. Shows
+    "unknown" until an install date is set and recorded history covers it.
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "firings_on_current_elements"
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_native_unit_of_measurement = "firings"
+    _attr_icon = "mdi:fire"
+
+    def __init__(self, coordinator: KilnDataCoordinator) -> None:
+        """Initialize the firings-on-current-elements sensor."""
+        super().__init__(coordinator)
+        self._attr_unique_id = (
+            f"{coordinator.serial_number}_firings_on_current_elements"
         )
 
-    def _get_firmware_version(self) -> str | None:
-        """Get firmware version from data."""
-        if not self.coordinator.data:
-            return None
-        return self.coordinator.data.get("settings", {}).get("firmwareVersion")
+    @property
+    def native_value(self) -> int | None:
+        """Return firings accumulated on the current element set."""
+        return self.coordinator.firings_on_current_elements

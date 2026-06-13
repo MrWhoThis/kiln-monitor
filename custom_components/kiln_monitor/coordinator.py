@@ -3,22 +3,29 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Any
 
+from homeassistant.components.recorder import get_instance
+from homeassistant.components.recorder.statistics import statistics_during_period
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .const import (
     ACTIVE_KILN_STATUSES,
     DATA_URL,
+    DOMAIN,
     LOGIN_URL,
+    NUMFIRINGS_DATA_PATH,
     STATUS_URL,
     CONF_EMAIL,
     CONF_PASSWORD,
     DEFAULT_ACTIVE_UPDATE_INTERVAL,
     DEFAULT_IDLE_UPDATE_INTERVAL,
+    dig,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -51,6 +58,10 @@ class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.email = config_data[CONF_EMAIL]
         self.password = config_data[CONF_PASSWORD]
         self.token: str | None = None
+        # Element-set tracking: the user enters the install date; the baseline
+        # (numFirings at that date) is derived from recorded history.
+        self._installed_at: date | None = None
+        self._element_baseline: int | None = None
 
         if kiln_info:
             self.kiln_id: str | None = kiln_info.get("kiln_id")
@@ -92,6 +103,93 @@ class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return self._active_interval
         return self._idle_interval
 
+    # ------------------------------------------------------------------
+    # Element-set tracking
+    #
+    # numFirings is the kiln's lifetime firing counter. The user enters the date
+    # the current element set was installed; the baseline (numFirings as of that
+    # date) is read back from Home Assistant's long-term statistics for the
+    # numFirings sensor. "Firings on the current set" is then current - baseline.
+    # The date itself is persisted by the date entity via RestoreEntity.
+    # ------------------------------------------------------------------
+
+    def current_num_firings(self) -> int | None:
+        """Return the kiln's lifetime firing count, or None if not yet known."""
+        value = dig(self.data, NUMFIRINGS_DATA_PATH)
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return None
+
+    @property
+    def element_installed_at(self) -> date | None:
+        """Date the current element set was installed, if set."""
+        return self._installed_at
+
+    @property
+    def firings_on_current_elements(self) -> int | None:
+        """Firings accumulated on the current element set, or None if unknown."""
+        lifetime = self.current_num_firings()
+        if lifetime is None or self._element_baseline is None:
+            return None
+        # Guard against a baseline that ended up above the lifetime count.
+        return max(0, lifetime - self._element_baseline)
+
+    async def async_set_installed_date(self, value: date | None) -> None:
+        """Set the element install date and recompute the derived baseline."""
+        self._installed_at = value
+        await self._async_recompute_element_baseline()
+        self.async_update_listeners()
+
+    async def _async_recompute_element_baseline(self) -> None:
+        """Derive the baseline (numFirings at the install date) from history."""
+        if self._installed_at is None:
+            self._element_baseline = None
+            return
+        # Just-changed case: count from now, even before statistics compile.
+        if self._installed_at >= dt_util.now().date():
+            self._element_baseline = self.current_num_firings()
+            return
+        self._element_baseline = await self._async_num_firings_at_install()
+
+    async def _async_num_firings_at_install(self) -> int | None:
+        """Read numFirings at the start of the install date from statistics.
+
+        Returns None when no recorded value covers that date (e.g. the date
+        predates this kiln's recorded history), which surfaces as "unknown".
+        """
+        registry = er.async_get(self.hass)
+        entity_id = registry.async_get_entity_id(
+            "sensor", DOMAIN, f"{self.serial_number}_numFirings"
+        )
+        if entity_id is None:
+            return None
+        day_start = dt_util.start_of_local_day(self._installed_at)
+        window_start = day_start - timedelta(days=30)
+        stats = await get_instance(self.hass).async_add_executor_job(
+            statistics_during_period,
+            self.hass,
+            window_start,
+            day_start,
+            {entity_id},
+            "hour",
+            None,
+            {"state"},
+        )
+        rows = stats.get(entity_id)
+        if not rows:
+            return None
+        # Rows are ascending by start; the last is the value just before install.
+        state = rows[-1].get("state")
+        if state is None:
+            return None
+        try:
+            return int(float(state))
+        except (ValueError, TypeError):
+            return None
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Update data via library."""
         try:
@@ -126,6 +224,7 @@ class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.kiln_name, status, desired_interval,
             )
             self.update_interval = desired_interval
+
         return data
 
     async def _ensure_authenticated(self) -> None:

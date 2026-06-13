@@ -6,6 +6,7 @@ A custom integration that surfaces your Bartlett Instruments kiln in Home Assist
 
 - **Live kiln telemetry** — temperature, kiln status, firmware version, lifetime firings count, and zone count.
 - **Firing progress** — estimated time remaining, elapsed firing time, current program segment, set point, and the active program name while a firing is in progress.
+- **Element-set tracking** — record when a new set of heating elements was installed and track how many firings are on the current set, so you know when they're due for replacement.
 - **Multiple kilns per account** — every kiln on your KilnAid account gets its own device and sensors automatically.
 - **Adaptive polling** — polls frequently (default: every 5 minutes) while a kiln is actively firing and backs off (default: every 15 minutes) when idle. Both intervals are configurable in the integration's options.
 - **Reauthentication flow** — if your stored password stops working (e.g. after changing it in the KilnAid app), Home Assistant prompts you to re-enter it without losing your sensors or history.
@@ -34,6 +35,35 @@ meaningful while a firing is in progress; the service reports stale values when
 the kiln is idle.
 
 Sensor names are prefixed with the kiln name so they remain unambiguous when multiple kilns are configured.
+
+## Element-set tracking
+
+Kiln heating elements wear out after a number of firings. Since the kiln's
+**Number of Firings** is a lifetime counter that never resets, the integration
+adds a per-kiln set of element-tracking entities:
+
+| Entity | Type | Purpose |
+| --- | --- | --- |
+| Elements installed | Date *(Configuration)* | The date the current element set was installed. This is the only thing you set — enter it whenever you fit new elements. |
+| Firings on current elements | Sensor | Read-only count of how many firings are on the current set. Counts up as the kiln fires and is graphed in history. |
+
+You only ever set the **Elements installed** date. From it, *Firings on current
+elements* is derived as the lifetime **Number of Firings** today minus what it
+was on that date — read back from Home Assistant's own recorded history of the
+firing counter. After fitting new elements, just set the date and the count
+starts from 0.
+
+This means the date can be entered retroactively: set it to when the elements
+were actually changed and the count is computed from history, no manual
+correction needed. The firing counter is recorded as long-term statistics
+(kept indefinitely), so old dates still work. If you enter a date from *before*
+Home Assistant began recording this kiln, the count shows **unknown** rather
+than a guess.
+
+No separate history of past element sets is stored — Home Assistant keeps it
+natively: the **Elements installed** date logs each replacement, and the
+**Firings on current elements** value is recorded in history so you can graph
+each set's wear over time.
 
 ## Installation (via HACS)
 

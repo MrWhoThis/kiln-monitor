@@ -21,7 +21,10 @@ from .coordinator import KilnDataCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.SENSOR]
+PLATFORMS: list[Platform] = [
+    Platform.DATE,
+    Platform.SENSOR,
+]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -47,7 +50,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         raise ConfigEntryNotReady("No kilns found for this account")
     
     _LOGGER.info("Found %d kiln(s) for account", len(kilns))
-    
+
     # Create a coordinator for each kiln
     coordinators = []
     for kiln_info in kilns:

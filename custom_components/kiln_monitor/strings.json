@@ -34,6 +34,14 @@
       "reauth_successful": "Reconnected to KilnAid successfully."
     }
   },
+  "entity": {
+    "sensor": {
+      "firings_on_current_elements": { "name": "Firings on current elements" }
+    },
+    "date": {
+      "elements_installed": { "name": "Elements installed" }
+    }
+  },
   "options": {
     "step": {
       "init": {
