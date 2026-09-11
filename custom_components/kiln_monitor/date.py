@@ -50,8 +50,10 @@ class KilnElementInstalledDate(KilnBaseEntity, RestoreEntity, DateEntity):
         self._attr_unique_id = f"{coordinator.serial_number}_elements_installed"
 
     async def async_added_to_hass(self) -> None:
-        """Restore the previously set install date and seed the coordinator."""
+        """Migrate a legacy restored date when durable storage is still empty."""
         await super().async_added_to_hass()
+        if self.coordinator.element_installed_at is not None:
+            return
         last_state = await self.async_get_last_state()
         if last_state is None or last_state.state in (None, "unknown", "unavailable"):
             return
@@ -65,6 +67,11 @@ class KilnElementInstalledDate(KilnBaseEntity, RestoreEntity, DateEntity):
     def native_value(self) -> date | None:
         """Return the stored install date."""
         return self.coordinator.element_installed_at
+
+    @property
+    def available(self) -> bool:
+        """Keep this user-owned configuration available during API outages."""
+        return True
 
     async def async_set_value(self, value: date) -> None:
         """Record the date the current element set was installed."""
