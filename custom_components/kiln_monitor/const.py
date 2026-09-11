@@ -36,6 +36,12 @@ CONF_IDLE_UPDATE_INTERVAL = "idle_update_interval"
 DEFAULT_ACTIVE_UPDATE_INTERVAL = 5   # minutes, used while a kiln is firing
 DEFAULT_IDLE_UPDATE_INTERVAL = 15    # minutes, used when the kiln is idle
 
+# Storage for user-entered element replacement data. This must not rely solely
+# on entity state restoration: coordinator failures mark entities unavailable,
+# and ``unavailable`` can become the state seen after a restart.
+ELEMENT_STORAGE_VERSION = 1
+ELEMENT_STORAGE_KEY = f"{DOMAIN}.element_tracking"
+
 # kilnStatus strings that should trigger fast polling (case-insensitive)
 ACTIVE_KILN_STATUSES = frozenset({"firing"})
 

@@ -6,8 +6,9 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.storage import Store
 
 from .const import (
     DOMAIN,
@@ -15,6 +16,8 @@ from .const import (
     CONF_IDLE_UPDATE_INTERVAL,
     DEFAULT_ACTIVE_UPDATE_INTERVAL,
     DEFAULT_IDLE_UPDATE_INTERVAL,
+    ELEMENT_STORAGE_KEY,
+    ELEMENT_STORAGE_VERSION,
     SETTINGS_URL,
 )
 from .coordinator import KilnDataCoordinator
@@ -38,6 +41,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         CONF_IDLE_UPDATE_INTERVAL, DEFAULT_IDLE_UPDATE_INTERVAL
     )
 
+    element_store = Store(
+        hass,
+        ELEMENT_STORAGE_VERSION,
+        f"{ELEMENT_STORAGE_KEY}.{entry.entry_id}",
+    )
+    stored_element_data = await element_store.async_load()
+    if not isinstance(stored_element_data, dict):
+        stored_element_data = {}
+    stored_kilns = stored_element_data.get("kilns", {})
+    if not isinstance(stored_kilns, dict):
+        stored_kilns = {}
+
     # First, get all kilns for this account
     try:
         kilns = await _fetch_all_kilns(hass, session, entry.data)
@@ -52,8 +67,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.info("Found %d kiln(s) for account", len(kilns))
 
     # Create a coordinator for each kiln
-    coordinators = []
+    coordinators: list[KilnDataCoordinator] = []
+
+    async def async_save_element_state() -> None:
+        """Persist element dates and baselines independently of entity state."""
+        kiln_states = dict(stored_kilns)
+        kiln_states.update(
+            {
+                coordinator.serial_number: coordinator.element_tracking_state()
+                for coordinator in coordinators
+                if coordinator.serial_number
+            }
+        )
+        await element_store.async_save({"kilns": kiln_states})
+
     for kiln_info in kilns:
+        serial_number = kiln_info.get("serial_number")
+        element_state = (
+            stored_kilns.get(str(serial_number), {})
+            if serial_number is not None
+            else {}
+        )
         coordinator = KilnDataCoordinator(
             hass,
             session,
@@ -61,10 +95,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             active_interval_minutes=active_interval,
             idle_interval_minutes=idle_interval,
             kiln_info=kiln_info,
+            element_state=element_state,
+            save_element_state=async_save_element_state,
         )
-        
-        await coordinator.async_config_entry_first_refresh()
         coordinators.append(coordinator)
+        await coordinator.async_config_entry_first_refresh()
+        await coordinator.async_initialize_element_tracking()
         
         _LOGGER.info(
             "Set up coordinator for kiln: %s (Serial: %s)", 

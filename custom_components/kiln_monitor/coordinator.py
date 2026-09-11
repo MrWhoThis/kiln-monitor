@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import date, timedelta
 from typing import Any
 
@@ -31,6 +32,10 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+class KilnTokenExpired(UpdateFailed):
+    """Raised when the API rejects an otherwise valid session token."""
+
+
 class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Class to manage fetching data from the Kiln API."""
 
@@ -42,6 +47,8 @@ class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         active_interval_minutes: int = DEFAULT_ACTIVE_UPDATE_INTERVAL,
         idle_interval_minutes: int = DEFAULT_IDLE_UPDATE_INTERVAL,
         kiln_info: dict[str, Any] | None = None,
+        element_state: dict[str, Any] | None = None,
+        save_element_state: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         """Initialize."""
         self._active_interval = timedelta(minutes=active_interval_minutes)
@@ -62,10 +69,15 @@ class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # (numFirings at that date) is derived from recorded history.
         self._installed_at: date | None = None
         self._element_baseline: int | None = None
+        self._save_element_state = save_element_state
+        self._restore_element_state(element_state)
 
         if kiln_info:
             self.kiln_id: str | None = kiln_info.get("kiln_id")
-            self.serial_number: str | None = kiln_info.get("serial_number")
+            serial_number = kiln_info.get("serial_number")
+            self.serial_number: str | None = (
+                str(serial_number) if serial_number is not None else None
+            )
             self.kiln_name: str | None = kiln_info.get("name", "Kiln")
         else:
             self.kiln_id: str | None = None
@@ -73,6 +85,33 @@ class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.kiln_name: str | None = None
 
         self._consecutive_failures = 0
+
+    def _restore_element_state(self, state: dict[str, Any] | None) -> None:
+        """Restore durable element tracking state, ignoring malformed values."""
+        if not isinstance(state, dict):
+            return
+
+        installed_at = state.get("installed_at")
+        if isinstance(installed_at, str):
+            try:
+                self._installed_at = date.fromisoformat(installed_at)
+            except ValueError:
+                _LOGGER.warning(
+                    "Ignoring invalid stored element install date %r", installed_at
+                )
+
+        baseline = state.get("baseline")
+        if isinstance(baseline, int) and not isinstance(baseline, bool):
+            self._element_baseline = baseline
+
+    def element_tracking_state(self) -> dict[str, Any]:
+        """Return the element tracking values in a storage-safe form."""
+        return {
+            "installed_at": (
+                self._installed_at.isoformat() if self._installed_at else None
+            ),
+            "baseline": self._element_baseline,
+        }
 
     def update_intervals(
         self, active_interval_minutes: int, idle_interval_minutes: int
@@ -110,7 +149,9 @@ class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # the current element set was installed; the baseline (numFirings as of that
     # date) is read back from Home Assistant's long-term statistics for the
     # numFirings sensor. "Firings on the current set" is then current - baseline.
-    # The date itself is persisted by the date entity via RestoreEntity.
+    # The date and baseline are persisted in integration storage. RestoreEntity
+    # remains only as a migration fallback for versions that stored the date in
+    # entity state alone.
     # ------------------------------------------------------------------
 
     def current_num_firings(self) -> int | None:
@@ -141,7 +182,17 @@ class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Set the element install date and recompute the derived baseline."""
         self._installed_at = value
         await self._async_recompute_element_baseline()
+        if self._save_element_state is not None:
+            await self._save_element_state()
         self.async_update_listeners()
+
+    async def async_initialize_element_tracking(self) -> None:
+        """Fill and persist a baseline missing from previously stored state."""
+        if self._installed_at is None or self._element_baseline is not None:
+            return
+        await self._async_recompute_element_baseline()
+        if self._save_element_state is not None:
+            await self._save_element_state()
 
     async def _async_recompute_element_baseline(self) -> None:
         """Derive the baseline (numFirings at the install date) from history."""
@@ -194,7 +245,17 @@ class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Update data via library."""
         try:
             await self._ensure_authenticated()
-            data = await self._fetch_kiln_data()
+            try:
+                data = await self._fetch_kiln_data()
+            except KilnTokenExpired:
+                # Token expiry is recoverable and common. Reauthenticate during
+                # this refresh rather than leaving every entity unavailable
+                # until a later poll (or an integration restart).
+                _LOGGER.info(
+                    "Session expired for kiln %s; reauthenticating", self.kiln_name
+                )
+                await self._authenticate()
+                data = await self._fetch_kiln_data()
         except ConfigEntryAuthFailed:
             # Credentials are bad — retrying won't help, surface to HA so reauth fires
             raise
@@ -319,10 +380,12 @@ class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 json=data_payload,
                 timeout=30
             ) as resp:
-                if resp.status == 401:
-                    # Token expired; clear it so the next poll re-authenticates.
+                if resp.status in (401, 403):
+                    # KilnAid has used both statuses for an expired token.
                     self.token = None
-                    raise UpdateFailed("Authentication token expired during data fetch")
+                    raise KilnTokenExpired(
+                        "Authentication token expired during data fetch"
+                    )
                 if resp.status == 404:
                     raise UpdateFailed("Kiln not found - check if kiln is online")
                 if resp.status >= 500:

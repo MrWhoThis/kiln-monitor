@@ -50,8 +50,10 @@ adds a per-kiln set of element-tracking entities:
 You only ever set the **Elements installed** date. From it, *Firings on current
 elements* is derived as the lifetime **Number of Firings** today minus what it
 was on that date — read back from Home Assistant's own recorded history of the
-firing counter. After fitting new elements, just set the date and the count
-starts from 0.
+firing counter. The selected date and its firing-count baseline are also stored
+by the integration, independently of sensor availability, so API outages and
+restarts cannot erase or shift them. After fitting new elements, just set the
+date and the count starts from 0.
 
 This means the date can be entered retroactively: set it to when the elements
 were actually changed and the count is computed from history, no manual
