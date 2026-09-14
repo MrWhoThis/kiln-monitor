@@ -380,11 +380,14 @@ class KilnDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 json=data_payload,
                 timeout=30
             ) as resp:
-                if resp.status in (401, 403):
-                    # KilnAid has used both statuses for an expired token.
+                if resp.status in (400, 401, 403):
+                    # KilnAid has used all three statuses for an expired token.
+                    # A 400 with a fresh token will fail again after the single
+                    # reauthentication attempt and surface as an update failure.
                     self.token = None
                     raise KilnTokenExpired(
-                        "Authentication token expired during data fetch"
+                        f"Authentication token rejected during data fetch "
+                        f"(status {resp.status})"
                     )
                 if resp.status == 404:
                     raise UpdateFailed("Kiln not found - check if kiln is online")
